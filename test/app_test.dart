@@ -65,6 +65,20 @@ void main() {
       expect(quickGroupCounts(null, ['premium']), isEmpty);
     });
 
+    test('status favorit dibagi & tidak peka huruf besar', () {
+      setFavoritesFrom([
+        {'address': 'Graydon@Fantatua.com'},
+        {'ref': 'tanpa-address'},
+      ]);
+      expect(isFavorite('graydon@fantatua.com'), isTrue);
+      expect(isFavorite('lain@x.com'), isFalse);
+      markFavorite('lain@x.com', true);
+      expect(isFavorite('LAIN@x.com'), isTrue);
+      markFavorite('graydon@fantatua.com', false);
+      expect(isFavorite('graydon@fantatua.com'), isFalse);
+      setFavoritesFrom([]);
+    });
+
     test('msgTimeShort pakai umur pesan bila ada', () {
       expect(msgTimeShort({'age_seconds': 300}), '5 mnt lalu');
       expect(msgTimeShort({}), '');
@@ -112,6 +126,18 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byType(InboxScreen), findsOneWidget);
+
+    // Beranda: tombol Favorit mengikuti daftar favorit.
+    await tester.tap(find.text('Beranda').last);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Favoritkan'), findsOneWidget);
+    setFavoritesFrom([
+      {'address': 'A@B.com'},
+    ]);
+    await tester.pump();
+    expect(find.text('Favoritkan'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Favorit'), findsOneWidget);
+    setFavoritesFrom([]);
 
     await tester.runAsync(() => appState.clearActive());
     await tester.pump(const Duration(milliseconds: 100));

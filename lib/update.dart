@@ -197,6 +197,23 @@ class UpdateService extends ChangeNotifier {
       status == UpdateStatus.downloading || status == UpdateStatus.verifying;
 
   /// Ada sesuatu yang layak ditampilkan di banner Beranda.
+  /// Banner Beranda yang ditutup pengguna (per rilis + status).
+  String? _dismissed;
+  String get _bannerKey => '${release?.tag}:${status.name}';
+
+  void dismissBanner() {
+    _dismissed = _bannerKey;
+    notifyListeners();
+  }
+
+  /// Banner tampil bila ada kabar & belum ditutup (unduhan berjalan selalu
+  /// tampil supaya progresnya terlihat).
+  bool get showBanner =>
+      hasNews &&
+      (status == UpdateStatus.downloading ||
+          status == UpdateStatus.verifying ||
+          _dismissed != _bannerKey);
+
   bool get hasNews => switch (status) {
     UpdateStatus.available ||
     UpdateStatus.downloading ||
@@ -752,7 +769,7 @@ class UpdateBanner extends StatelessWidget {
     return ListenableBuilder(
       listenable: u,
       builder: (ctx, _) {
-        if (!u.hasNews || u.release == null) return const SizedBox.shrink();
+        if (!u.showBanner || u.release == null) return const SizedBox.shrink();
         final s = Theme.of(ctx).colorScheme;
         final r = u.release!;
         final (IconData icon, String title, String sub) = switch (u.status) {
@@ -838,7 +855,21 @@ class UpdateBanner extends StatelessWidget {
                             ],
                           ),
                         ),
-                        const Icon(Icons.chevron_right),
+                        if (u.status == UpdateStatus.downloading ||
+                            u.status == UpdateStatus.verifying)
+                          const Icon(Icons.chevron_right)
+                        else
+                          IconButton(
+                            tooltip: 'Tutup',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: u.dismissBanner,
+                            icon: Icon(
+                              Icons.close,
+                              color: failed
+                                  ? s.onErrorContainer
+                                  : s.onTertiaryContainer,
+                            ),
+                          ),
                       ],
                     ),
                     if (u.status == UpdateStatus.downloading ||
@@ -893,6 +924,21 @@ class _UpdateScreenState extends State<UpdateScreen> {
         DateTime.now().difference(last).inMinutes >= 10) {
       u.check();
     }
+  }
+
+  /// Batal/hapus membuang bagian yang sudah terunduh → minta konfirmasi.
+  Future<void> _confirmCancel() async {
+    final done = u.status == UpdateStatus.downloaded;
+    if (!done && u.received == 0) return u.cancel();
+    final ok = await confirmDialog(
+      context,
+      title: done ? 'Hapus file unduhan?' : 'Batalkan unduhan?',
+      body: done
+          ? 'APK ${u.release?.tag ?? ''} yang sudah diunduh akan dihapus.'
+          : 'Bagian yang sudah terunduh (${fmtBytes(u.received)}) akan dihapus.',
+      confirmLabel: done ? 'Hapus' : 'Batalkan',
+    );
+    if (ok) await u.cancel();
   }
 
   Future<void> _install() async {
@@ -993,7 +1039,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: u.cancel,
+                  onPressed: _confirmCancel,
                   icon: const Icon(Icons.close),
                   label: const Text('Batal'),
                 ),
@@ -1026,7 +1072,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: u.cancel,
+                  onPressed: _confirmCancel,
                   icon: const Icon(Icons.close),
                   label: const Text('Batal'),
                 ),
@@ -1062,7 +1108,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: u.cancel,
+                  onPressed: _confirmCancel,
                   icon: const Icon(Icons.delete_outline),
                   label: const Text('Batal'),
                 ),
@@ -1102,17 +1148,33 @@ class _UpdateScreenState extends State<UpdateScreen> {
             style: TextStyle(color: s.onSurfaceVariant, fontSize: 12),
           ),
           TextButton(
-            onPressed: u.cancel,
+            onPressed: _confirmCancel,
             child: const Text('Hapus file unduhan'),
           ),
         ];
       case UpdateStatus.idle:
         body = [
-          chip(
-            'Belum diperiksa',
-            s.surfaceContainerHighest,
-            s.onSurface,
-            Icons.help_outline,
+          if (u.checkError != null)
+            chip(
+              'Gagal memeriksa',
+              s.errorContainer,
+              s.onErrorContainer,
+              Icons.cloud_off,
+            )
+          else
+            chip(
+              'Belum diperiksa',
+              s.surfaceContainerHighest,
+              s.onSurface,
+              Icons.help_outline,
+            ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => u.check(),
+            icon: const Icon(Icons.refresh),
+            label: Text(
+              u.checkError != null ? 'Coba lagi' : 'Periksa sekarang',
+            ),
           ),
         ];
     }

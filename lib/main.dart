@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
@@ -102,6 +103,35 @@ void _onNotificationAction(String action, String payload) {
 /// walau tidak terlihat, jadi mereka memakai ini untuk tahu kapan perlu
 /// memuat ulang (Favorit) atau menghentikan auto-refresh (Inbox).
 final currentTab = ValueNotifier<int>(0);
+
+/// Alamat favorit (huruf kecil), dibagi Beranda & tab Favorit supaya tombol
+/// Favorit di Beranda selalu sesuai dengan daftar favorit.
+final favoriteAddresses = ValueNotifier<Set<String>>(<String>{});
+
+String _normAddr(String a) => a.trim().toLowerCase();
+
+bool isFavorite(String? address) =>
+    address != null && favoriteAddresses.value.contains(_normAddr(address));
+
+void setFavoritesFrom(List<dynamic> items) {
+  favoriteAddresses.value = {
+    for (final f in items)
+      if (f is Map && '${f['address'] ?? ''}'.trim().isNotEmpty)
+        _normAddr('${f['address']}'),
+  };
+}
+
+void markFavorite(String address, bool on) {
+  final s = {...favoriteAddresses.value};
+  on ? s.add(_normAddr(address)) : s.remove(_normAddr(address));
+  favoriteAddresses.value = s;
+}
+
+Future<void> refreshFavorites() async {
+  try {
+    setFavoritesFrom(listOf(await api.favorites(), ['items', 'favorites']));
+  } catch (_) {}
+}
 
 const int kTabHome = 0;
 const int kTabInbox = 1;
@@ -218,6 +248,11 @@ class TempMailApp extends StatelessWidget {
     return MaterialApp(
       title: 'TempMail',
       navigatorKey: navigatorKey,
+      // Teks bawaan Material (tooltip Kembali, menu Salin/Tempel, dll.)
+      // dalam bahasa Indonesia.
+      locale: const Locale('id'),
+      supportedLocales: const [Locale('id'), Locale('en')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       debugShowCheckedModeBanner: false,
       theme: theme(scheme),
       darkTheme: theme(darkScheme),

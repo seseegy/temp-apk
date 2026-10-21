@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'api.dart';
 import 'main.dart';
 import 'notify.dart';
+import 'screens_main.dart' show fmtTime;
 
 class OtpScreen extends StatefulWidget {
   const OtpScreen({super.key});
@@ -43,6 +44,10 @@ class _OtpScreenState extends State<OtpScreen> {
   dynamic _verifyLatest;
   dynamic _verifyWait;
   bool _verifyWaiting = false;
+  bool _verifyLoading = false;
+  int _verifyGen = 0; // naik saat "Tunggu link" dibatalkan
+  String? _waitError; // galat/timeout "Tunggu OTP" (pesan ramah, bukan JSON)
+  String? _waitAnyError;
 
   String? _shownRef;
 
@@ -60,11 +65,20 @@ class _OtpScreenState extends State<OtpScreen> {
     if (action != 'wait_stop' || !mounted) return;
     if (_waiting) _wait();
     if (_streaming) _toggleStream();
-    if (_waitingAny) {
-      _anyGen++;
-      setState(() => _waitingAny = false);
-      Notifier.instance.setWaiting('any', null);
-    }
+    if (_waitingAny) _cancelWaitAny();
+    if (_verifyWaiting) _cancelVerifyWait();
+  }
+
+  void _cancelWaitAny() {
+    _anyGen++;
+    Notifier.instance.setWaiting('any', null);
+    setState(() => _waitingAny = false);
+  }
+
+  void _cancelVerifyWait() {
+    _verifyGen++;
+    Notifier.instance.setWaiting('link', null);
+    setState(() => _verifyWaiting = false);
   }
 
   String get _addr => appState.activeAddress ?? _ref ?? '';
@@ -82,12 +96,9 @@ class _OtpScreenState extends State<OtpScreen> {
   }
 
   // Buka tab OTP → langsung tampilkan OTP terbaru (sekali per alamat).
+  // Buka tab OTP → segarkan OTP terbaru (email baru bisa masuk kapan saja).
   void _onTab() {
-    if (currentTab.value == kTabOtp &&
-        _ref != null &&
-        _latest == null &&
-        _latestEmpty == null &&
-        !_loadingLatest) {
+    if (currentTab.value == kTabOtp && _ref != null && !_loadingLatest) {
       _loadLatest();
     }
   }
@@ -115,9 +126,13 @@ class _OtpScreenState extends State<OtpScreen> {
       _stopWaitTick();
       _waitGen++;
       _refGen++;
+      _verifyGen++;
       Notifier.instance.setWaiting('wait', null);
       Notifier.instance.setWaiting('stream', null);
+      Notifier.instance.setWaiting('link', null);
       setState(() {
+        _waitError = null;
+        _verifyLoading = false;
         _shownRef = appState.activeRef;
         _loadingLatest = false;
         _latest = null;
@@ -234,6 +249,7 @@ class _OtpScreenState extends State<OtpScreen> {
     setState(() {
       _waiting = true;
       _waitResult = null;
+      _waitError = null;
       _waitStale = false;
       _waitSecs = 0;
     });
@@ -267,12 +283,9 @@ class _OtpScreenState extends State<OtpScreen> {
           _waitResult = {'otp': stale['otp'], 'message': stale};
           _waitStale = true;
         } else {
-          _waitResult = {
-            'status': e is ApiException && e.code == 'WAIT_TIMEOUT'
-                ? 'Waktu habis, tidak ada OTP baru'
-                : 'Gagal',
-            'pesan': errorText(e),
-          };
+          _waitError = e is ApiException && e.code == 'WAIT_TIMEOUT'
+              ? 'Waktu habis, tidak ada OTP baru dalam $_timeout dtk.'
+              : errorText(e);
         }
       });
     } finally {
@@ -299,10 +312,16 @@ class _OtpScreenState extends State<OtpScreen> {
       showError(context, 'Maksimal 10 alamat (sekarang ${refs.length})');
       return;
     }
+    if (_waitingAny) {
+      _cancelWaitAny();
+      showOk(context, 'Menunggu dibatalkan');
+      return;
+    }
     final gen = ++_anyGen;
     setState(() {
       _waitingAny = true;
       _waitAnyResult = null;
+      _waitAnyError = null;
     });
     Notifier.instance.ensurePermission();
     Notifier.instance.setWaiting(
@@ -330,10 +349,9 @@ class _OtpScreenState extends State<OtpScreen> {
       if (gen != _anyGen) return;
       if (mounted) {
         setState(
-          () => _waitAnyResult = {
-            'status': 'timeout/gagal',
-            'pesan': errorText(e),
-          },
+          () => _waitAnyError = e is ApiException && e.code == 'WAIT_TIMEOUT'
+              ? 'Waktu habis, belum ada yang datang dalam $_timeout dtk.'
+              : errorText(e),
         );
       }
     } finally {
@@ -418,14 +436,27 @@ class _OtpScreenState extends State<OtpScreen> {
   }
 
   Future<void> _verify(bool wait) async {
+    if (wait && _verifyWaiting) {
+      _cancelVerifyWait();
+      showOk(context, 'Menunggu link dibatalkan');
+      return;
+    }
     final ref = _ref;
     if (ref == null) return;
     final gen = _refGen;
-    if (wait) setState(() => _verifyWaiting = true);
+    final vgen = wait ? ++_verifyGen : _verifyGen;
+    if (wait) {
+      setState(() => _verifyWaiting = true);
+      Notifier.instance.ensurePermission();
+      Notifier.instance.setWaiting('link', 'Link verifikasi · $_addr');
+    } else {
+      setState(() => _verifyLoading = true);
+    }
     try {
       final r = wait
           ? await api.verifyWait(ref, timeout: _timeout)
           : await api.verifyLatest(ref);
+      if (wait && vgen != _verifyGen) return;
       if (mounted && gen == _refGen) {
         setState(() {
           if (wait) {
@@ -436,12 +467,90 @@ class _OtpScreenState extends State<OtpScreen> {
         });
       }
     } catch (e) {
+      if (wait && vgen != _verifyGen) return;
       if (mounted && gen == _refGen) showError(context, e);
     } finally {
-      if (mounted && wait && gen == _refGen) {
-        setState(() => _verifyWaiting = false);
+      if (wait && vgen == _verifyGen) {
+        Notifier.instance.setWaiting('link', null);
+        if (mounted) setState(() => _verifyWaiting = false);
+      } else if (!wait && mounted && gen == _refGen) {
+        setState(() => _verifyLoading = false);
       }
     }
+  }
+
+  /// Kartu pesan biasa (waktu habis / gagal) — pengganti JSON mentah.
+  Widget _infoCard(String text, {bool error = false}) {
+    final s = Theme.of(context).colorScheme;
+    return Card(
+      color: error ? s.errorContainer : null,
+      child: ListTile(
+        leading: Icon(
+          error ? Icons.error_outline : Icons.timer_off_outlined,
+          color: error ? s.onErrorContainer : s.onSurfaceVariant,
+        ),
+        title: Text(
+          text,
+          style: TextStyle(color: error ? s.onErrorContainer : null),
+        ),
+      ),
+    );
+  }
+
+  /// Riwayat OTP sebagai daftar (kode · subjek · waktu), JSON hanya cadangan.
+  Widget _historyView(dynamic h) {
+    final s = Theme.of(context).colorScheme;
+    final items = listOf(h, ['items', 'history', 'otps', 'entries']);
+    if (items.isEmpty) {
+      final empty = h == null || (h is Map && h.isEmpty) || (h is List);
+      return empty
+          ? Text(
+              'Belum ada riwayat OTP.',
+              style: TextStyle(color: s.onSurfaceVariant),
+            )
+          : JsonView(h);
+    }
+    return Column(
+      children: [
+        for (final it in items.take(30))
+          if (it is Map)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.pin_outlined, size: 20),
+              title: Text(
+                '${it['otp'] ?? it['code'] ?? '-'}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
+                ),
+              ),
+              subtitle: Text(
+                [
+                  it['subject'],
+                  it['from'],
+                  if ((it['at'] ??
+                          it['time'] ??
+                          it['received_at'] ??
+                          it['ts']) !=
+                      null)
+                    fmtTime(
+                      it['at'] ?? it['time'] ?? it['received_at'] ?? it['ts'],
+                    ),
+                ].where((e) => e != null && '$e'.isNotEmpty).join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.copy, size: 18),
+              onTap: () {
+                final c = '${it['otp'] ?? it['code'] ?? ''}';
+                if (c.isNotEmpty) copyText(context, c, 'OTP $c disalin');
+              },
+            )
+          else
+            ListTile(dense: true, title: Text('$it')),
+      ],
+    );
   }
 
   /// Ambil nilai utama (kode OTP / URL link) dari respons.
@@ -645,6 +754,7 @@ class _OtpScreenState extends State<OtpScreen> {
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                         ],
+                        onChanged: (_) => setState(() {}),
                         decoration: const InputDecoration(
                           suffixText: 'dtk',
                           isDense: true,
@@ -653,6 +763,15 @@ class _OtpScreenState extends State<OtpScreen> {
                     ),
                   ],
                 ),
+                if (int.tryParse(_timeoutCtl.text.trim()) case final t?
+                    when t != _timeout)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Batas 5–280 dtk — dipakai $_timeout dtk.',
+                      style: TextStyle(color: s.error, fontSize: 12),
+                    ),
+                  ),
                 if (_waiting) ...[
                   const SizedBox(height: 8),
                   LinearProgressIndicator(
@@ -672,6 +791,13 @@ class _OtpScreenState extends State<OtpScreen> {
                 if (_waitResult != null) ...[
                   const SizedBox(height: 10),
                   _otpCard('Hasil tunggu OTP', _waitResult, stale: _waitStale),
+                ],
+                if (_waitError != null) ...[
+                  const SizedBox(height: 10),
+                  _infoCard(
+                    _waitError!,
+                    error: !_waitError!.startsWith('Waktu habis'),
+                  ),
                 ],
                 const SizedBox(height: 16),
                 _section('Stream real-time (SSE)', [
@@ -712,7 +838,8 @@ class _OtpScreenState extends State<OtpScreen> {
                     minLines: 2,
                     autocorrect: false,
                     decoration: InputDecoration(
-                      labelText: 'Daftar ref (pisah baris/koma, maks 10)',
+                      labelText: 'Daftar ref',
+                      helperText: 'Pisahkan dengan baris/koma, maks 10',
                       suffixIcon: IconButton(
                         tooltip: 'Tambah alamat aktif',
                         icon: const Icon(Icons.add_circle_outline),
@@ -738,8 +865,8 @@ class _OtpScreenState extends State<OtpScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: FilledButton.tonal(
-                          onPressed: _waitingAny ? null : _waitAny,
-                          child: Text(_waitingAny ? 'Menunggu…' : 'Tunggu'),
+                          onPressed: _waitAny,
+                          child: Text(_waitingAny ? 'Batal' : 'Tunggu'),
                         ),
                       ),
                     ],
@@ -755,6 +882,17 @@ class _OtpScreenState extends State<OtpScreen> {
                     else
                       JsonView(_waitAnyResult),
                   ],
+                  if (_waitingAny) ...[
+                    const SizedBox(height: 8),
+                    const LinearProgressIndicator(minHeight: 2),
+                  ],
+                  if (_waitAnyError != null) ...[
+                    const SizedBox(height: 10),
+                    _infoCard(
+                      _waitAnyError!,
+                      error: !_waitAnyError!.startsWith('Waktu habis'),
+                    ),
+                  ],
                 ]),
                 const SizedBox(height: 16),
                 _section('Link verifikasi / reset', [
@@ -762,19 +900,25 @@ class _OtpScreenState extends State<OtpScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => _verify(false),
-                          child: const Text('Link terbaru'),
+                          onPressed: _verifyLoading
+                              ? null
+                              : () => _verify(false),
+                          child: _verifyLoading
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Link terbaru'),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: _verifyWaiting
-                              ? null
-                              : () => _verify(true),
-                          child: Text(
-                            _verifyWaiting ? 'Menunggu…' : 'Tunggu link',
-                          ),
+                          onPressed: () => _verify(true),
+                          child: Text(_verifyWaiting ? 'Batal' : 'Tunggu link'),
                         ),
                       ),
                     ],
@@ -791,7 +935,7 @@ class _OtpScreenState extends State<OtpScreen> {
                 const SizedBox(height: 16),
                 _section(
                   'Riwayat OTP',
-                  [if (_history != null) JsonView(_history)],
+                  [if (_history != null) _historyView(_history)],
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [

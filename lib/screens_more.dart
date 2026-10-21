@@ -47,12 +47,19 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   void initState() {
     super.initState();
     currentTab.addListener(_onTab);
+    appState.addListener(_onActive);
     _load();
+  }
+
+  // Sorotan "aktif" harus pindah begitu alamat aktif berganti.
+  void _onActive() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     currentTab.removeListener(_onTab);
+    appState.removeListener(_onActive);
     super.dispose();
   }
 
@@ -65,6 +72,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     try {
       final r = await api.favorites();
       final list = listOf(r, ['items', 'favorites']).toList();
+      setFavoritesFrom(list);
       // Yang disematkan selalu di atas.
       list.sort((a, b) {
         final pa = a is Map && a['pinned'] == true ? 0 : 1;
@@ -84,6 +92,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           _loading = false;
           _err = errorText(e);
         });
+        // Daftar lama tetap tampil; beri tahu bahwa penyegaran gagal.
+        if (_items.isNotEmpty) showError(context, e);
       }
     }
   }
@@ -242,6 +252,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     if (save != true) return;
     try {
       await api.patchFavorite(addr, label: l, note: n);
+      if (mounted) showOk(context, 'Label & catatan disimpan');
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -258,6 +269,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         await copyText(context, addr, 'Alamat disalin');
       } else if (v == 'pin') {
         await api.patchFavorite(addr, pinned: !pinned);
+        if (mounted) {
+          showOk(context, pinned ? 'Sematan dilepas' : 'Disematkan di atas');
+        }
         _load();
       } else if (v == 'edit') {
         await _edit(f);
@@ -932,6 +946,10 @@ class _AliasScreenState extends State<AliasScreen> {
   bool _loading = true;
   bool _dirty = false;
   bool _saving = false;
+  // Belum pernah berhasil dimuat → jangan izinkan simpan (bisa menimpa
+  // alias.md di server dengan isi kosong).
+  bool _loaded = false;
+  String? _loadError;
   Map? _summary;
   List<dynamic> _issues = [];
 
@@ -969,11 +987,16 @@ class _AliasScreenState extends State<AliasScreen> {
           _issues = [];
           _summary = null;
           _loading = false;
+          _loaded = true;
+          _loadError = null;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _loadError = errorText(e);
+        });
         showError(context, e);
       }
     }
@@ -1204,6 +1227,31 @@ class _AliasScreenState extends State<AliasScreen> {
                       ),
                     const SizedBox(height: 12),
                   ],
+                  if (!_loaded && _loadError != null) ...[
+                    Card(
+                      color: s.errorContainer,
+                      child: ListTile(
+                        leading: Icon(
+                          Icons.cloud_off,
+                          color: s.onErrorContainer,
+                        ),
+                        title: Text(
+                          'alias.md gagal dimuat',
+                          style: TextStyle(color: s.onErrorContainer),
+                        ),
+                        subtitle: Text(
+                          '$_loadError\nSimpan dinonaktifkan agar alias di server tidak tertimpa.',
+                          style: TextStyle(color: s.onErrorContainer),
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Coba lagi',
+                          icon: Icon(Icons.refresh, color: s.onErrorContainer),
+                          onPressed: _load,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   _heading('Isi alias.md${_dirty ? ' (belum disimpan)' : ''}'),
                   TextField(
                     controller: _ctl,
@@ -1227,14 +1275,14 @@ class _AliasScreenState extends State<AliasScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: _validate,
+                          onPressed: _loaded ? _validate : null,
                           child: const Text('Validasi'),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: FilledButton(
-                          onPressed: _saving ? null : _save,
+                          onPressed: _saving || !_loaded ? null : _save,
                           child: Text(_saving ? 'Menyimpan…' : 'Simpan'),
                         ),
                       ),
@@ -1478,6 +1526,7 @@ class _DomainsScreenState extends State<DomainsScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconButton(
+                  tooltip: 'Halaman sebelumnya',
                   onPressed: _page <= 1 || _busy
                       ? null
                       : () => _search(page: _page - 1),
@@ -1485,6 +1534,7 @@ class _DomainsScreenState extends State<DomainsScreen> {
                 ),
                 Text('Hal $_page / $pages'),
                 IconButton(
+                  tooltip: 'Halaman berikutnya',
                   onPressed: _page >= pages || _busy
                       ? null
                       : () => _search(page: _page + 1),
@@ -1516,11 +1566,17 @@ class _HistoryScreenState extends State<HistoryScreen>
   @override
   void initState() {
     super.initState();
+    appState.addListener(_onActive);
     _load();
+  }
+
+  void _onActive() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    appState.removeListener(_onActive);
     _tabs.dispose();
     super.dispose();
   }
@@ -1560,8 +1616,15 @@ class _HistoryScreenState extends State<HistoryScreen>
   }
 
   Future<void> _deleteOne(String addr) async {
+    final ok = await confirmDialog(
+      context,
+      title: 'Hapus dari riwayat?',
+      body: '$addr hilang dari daftar "Baru dipakai" (inbox tidak terhapus).',
+    );
+    if (!ok) return;
     try {
       await api.deleteRecent(addr);
+      if (mounted) showOk(context, 'Dihapus dari riwayat');
       _load();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -1832,8 +1895,16 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<void> _delete(Map w) async {
     final id = w['id']?.toString();
     if (id == null) return;
+    final ok = await confirmDialog(
+      context,
+      title: 'Hapus pantauan?',
+      body:
+          'Pantauan untuk ${w['address'] ?? w['ref'] ?? id} dihentikan dan tidak mengirim notifikasi lagi.',
+    );
+    if (!ok) return;
     try {
       await api.watchDelete(id);
+      if (mounted) showOk(context, 'Pantauan dihapus');
       _load();
     } catch (e) {
       if (mounted) showError(context, e);

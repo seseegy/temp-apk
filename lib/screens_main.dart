@@ -140,14 +140,21 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     appState.addListener(_onState);
     currentTab.addListener(_onTab);
+    favoriteAddresses.addListener(_onFavorites);
     _loadInfo();
     _loadGroupCounts();
+    refreshFavorites();
+  }
+
+  void _onFavorites() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     appState.removeListener(_onState);
     currentTab.removeListener(_onTab);
+    favoriteAddresses.removeListener(_onFavorites);
     _alias.dispose();
     _domain.dispose();
     _group.dispose();
@@ -166,7 +173,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Kembali ke Beranda dari tab lain → jumlah pesan ikut diperbarui.
   void _onTab() {
-    if (currentTab.value == kTabHome) _loadInfo();
+    if (currentTab.value == kTabHome) {
+      _loadInfo();
+      refreshFavorites(); // favorit bisa berubah di tab lain
+    }
   }
 
   /// [showErrors] = tampilkan galat (saat refresh manual); muat otomatis diam.
@@ -191,7 +201,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      await Future.wait([_loadInfo(showErrors: true), _loadGroupCounts()]);
+      await Future.wait([
+        _loadInfo(showErrors: true),
+        _loadGroupCounts(),
+        refreshFavorites(),
+      ]);
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -267,29 +281,47 @@ class _HomeScreenState extends State<HomeScreen> {
         await api.clearCache(ref);
         if (mounted) showOk(context, 'Cache mailbox dibersihkan');
       } else if (kind == 'fav') {
-        final r = await api.addFavorite(appState.activeAddress ?? ref);
-        if (mounted) {
-          showOk(
+        // Toggle seperti web resmi: sudah favorit → hapus (dengan konfirmasi).
+        final addr = appState.activeAddress ?? ref;
+        if (isFavorite(addr)) {
+          final ok = await confirmDialog(
             context,
-            r is Map && r['created'] == false
-                ? 'Sudah ada di favorit'
-                : 'Ditambahkan ke favorit',
+            title: 'Hapus dari favorit?',
+            body: '$addr tidak akan tersimpan permanen lagi.',
           );
+          if (!ok) return;
+          await api.removeFavorite(addr);
+          markFavorite(addr, false);
+          if (mounted) showOk(context, 'Dihapus dari favorit');
+        } else {
+          final r = await api.addFavorite(addr);
+          markFavorite(addr, true);
+          if (mounted) {
+            showOk(
+              context,
+              r is Map && r['created'] == false
+                  ? 'Sudah ada di favorit'
+                  : 'Ditambahkan ke favorit',
+            );
+          }
         }
       } else if (kind == 'wipe') {
         final ok = await confirmDialog(
           context,
           title: 'Hapus inbox?',
           body:
-              'Semua email + riwayat OTP untuk ${appState.activeAddress} akan dihapus permanen.',
+              'Semua email + riwayat OTP untuk ${appState.activeAddress} akan dihapus permanen. '
+              'Alamatnya tetap aktif dan tetap bisa menerima email baru.',
         );
         if (!ok) return;
-        await api.deleteMailbox(ref);
-        await appState.clearActive();
+        // Seperti web resmi: hanya isi inbox yang dihapus, alamat tetap aktif.
+        final r = await api.deleteMailbox(ref);
         if (mounted) {
           setState(() => _info = null);
-          showOk(context, 'Inbox dihapus');
+          final n = r is Map ? r['deleted_count'] : null;
+          showOk(context, n == null ? 'Inbox dikosongkan' : '$n email dihapus');
         }
+        _loadInfo();
       }
     } catch (e) {
       if (mounted) showError(context, e);
@@ -443,11 +475,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          OutlinedButton.icon(
-                            onPressed: () => _action('fav'),
-                            icon: const Icon(Icons.star_outline, size: 18),
-                            label: const Text('Favorit'),
-                          ),
+                          if (isFavorite(addr))
+                            FilledButton.tonalIcon(
+                              onPressed: () => _action('fav'),
+                              icon: const Icon(Icons.star, size: 18),
+                              label: const Text('Favorit'),
+                            )
+                          else
+                            OutlinedButton.icon(
+                              onPressed: () => _action('fav'),
+                              icon: const Icon(Icons.star_outline, size: 18),
+                              label: const Text('Favoritkan'),
+                            ),
                           OutlinedButton.icon(
                             onPressed: () => _action('read'),
                             icon: const Icon(Icons.done_all, size: 18),
@@ -807,10 +846,28 @@ class _InboxScreenState extends State<InboxScreen> {
       );
     } else if (_msgs.isEmpty) {
       content = _scrollableState(
-        EmptyState(
-          icon: Icons.mark_email_unread_outlined,
-          title: _onlyOtp ? 'Belum ada email ber-OTP' : 'Inbox kosong',
-          subtitle: 'Belum ada email masuk. Tarik ke bawah untuk menyegarkan.',
+        Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            EmptyState(
+              icon: _onlyOtp
+                  ? Icons.filter_alt_off_outlined
+                  : Icons.mark_email_unread_outlined,
+              title: _onlyOtp ? 'Belum ada email ber-OTP' : 'Inbox kosong',
+              subtitle: _onlyOtp
+                  ? 'Filter "hanya OTP" aktif. Email lain disembunyikan.'
+                  : 'Belum ada email masuk. Tarik ke bawah untuk menyegarkan.',
+            ),
+            if (_onlyOtp)
+              FilledButton.tonalIcon(
+                onPressed: () {
+                  setState(() => _onlyOtp = false);
+                  _reload();
+                },
+                icon: const Icon(Icons.filter_alt_off),
+                label: const Text('Tampilkan semua email'),
+              ),
+          ],
         ),
       );
     } else {
@@ -863,40 +920,55 @@ class _InboxScreenState extends State<InboxScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                ],
-              ),
-              trailing: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(msgTimeShort(m), style: const TextStyle(fontSize: 12)),
-                  if (otp != null) ...[
-                    const SizedBox(height: 4),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () =>
-                          copyText(context, otp.toString(), 'OTP $otp disalin'),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
+                  // Chip OTP di bawah subjek (bukan di kolom kanan) supaya
+                  // subjek tidak terpotong di layar sempit.
+                  if (otp != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => copyText(
+                          context,
+                          otp.toString(),
+                          'OTP $otp disalin',
                         ),
-                        decoration: BoxDecoration(
-                          color: s.primaryContainer,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'OTP $otp',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: s.onPrimaryContainer,
-                            fontWeight: FontWeight.w700,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: s.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'OTP $otp',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: s.onPrimaryContainer,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Icon(
+                                Icons.copy,
+                                size: 14,
+                                color: s.onPrimaryContainer,
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                  ],
                 ],
+              ),
+              trailing: Text(
+                msgTimeShort(m),
+                style: const TextStyle(fontSize: 12),
               ),
               onTap: () => _open(ref, m),
             ),
@@ -1146,6 +1218,7 @@ class _MessageDetailScreenState extends State<MessageDetailScreen> {
                 style: TextStyle(color: s.onErrorContainer),
               ),
               trailing: IconButton(
+                tooltip: 'Coba lagi',
                 icon: Icon(Icons.refresh, color: s.onErrorContainer),
                 onPressed: _load,
               ),
