@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_otp_label">TempMail: Alamat &amp; OTP</string>
+    <string name="widget_otp_desc">Alamat aktif + OTP terbaru, salin dengan sekali ketuk.</string>
+    <string name="widget_quick_label">TempMail: Buat cepat</string>
+    <string name="widget_quick_desc">Buat alamat acak per jenis domain, langsung disalin.</string>
+</resources>

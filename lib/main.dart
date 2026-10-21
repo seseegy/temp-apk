@@ -13,6 +13,7 @@ import 'screens_main.dart';
 import 'screens_otp.dart';
 import 'notify.dart';
 import 'screens_more.dart';
+import 'home_widgets.dart';
 import 'update.dart';
 
 final api = TempmailApi();
@@ -28,7 +29,11 @@ class AppState extends ChangeNotifier {
     return File('${dir.path}/tempmail_state.json');
   }
 
+  /// Baca ulang file state. Hanya memberi tahu pendengar bila isinya
+  /// berubah (dipanggil juga saat aplikasi kembali ke depan, karena widget
+  /// "Buat cepat" bisa mengganti alamat aktif saat aplikasi ditutup).
   Future<void> load() async {
+    final before = (activeRef, activeAddress);
     try {
       final f = await _stateFile();
       if (await f.exists()) {
@@ -37,7 +42,7 @@ class AppState extends ChangeNotifier {
         activeAddress = m['address'] as String?;
       }
     } catch (_) {}
-    notifyListeners();
+    if ((activeRef, activeAddress) != before) notifyListeners();
   }
 
   Future<void> _save() async {
@@ -103,6 +108,9 @@ void _onNotificationAction(String action, String payload) {
 /// walau tidak terlihat, jadi mereka memakai ini untuk tahu kapan perlu
 /// memuat ulang (Favorit) atau menghentikan auto-refresh (Inbox).
 final currentTab = ValueNotifier<int>(0);
+
+/// Perintah ke tab OTP dari luar (mis. tombol "Tunggu OTP" di widget).
+final otpCommand = ValueNotifier<String?>(null);
 
 /// Alamat favorit (huruf kecil), dibagi Beranda & tab Favorit supaya tombol
 /// Favorit di Beranda selalu sesuai dengan daftar favorit.
@@ -175,6 +183,7 @@ void main() {
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     await Notifier.instance.init();
     await UpdateService.instance.init();
+    await HomeWidgets.init();
   });
 }
 
@@ -268,7 +277,7 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
   static const _pages = [
     HomeScreen(),
     InboxScreen(),
@@ -281,12 +290,20 @@ class _ShellState extends State<Shell> {
   void initState() {
     super.initState();
     currentTab.addListener(_onTab);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
     currentTab.removeListener(_onTab);
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  // Kembali ke aplikasi → alamat aktif mungkin diganti widget "Buat cepat".
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) appState.load();
   }
 
   void _onTab() {

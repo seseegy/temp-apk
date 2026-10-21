@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Warna widget layar utama (tema terang; gelap di values-night). -->
+<resources>
+    <color name="widget_bg">#FFF7F9FF</color>
+    <color name="widget_text">#FF1B1B21</color>
+    <color name="widget_muted">#FF5B5E72</color>
+    <color name="widget_accent">#FF2563EB</color>
+    <color name="widget_btn">#FFDCE2F9</color>
+    <color name="widget_btn_text">#FF1E3A8A</color>
+    <color name="widget_otp_bg">#FFE3E8FF</color>
+</resources>

@@ -16,6 +16,11 @@ notifikasi, debug, dan admin.
   dari GitHub Releases repo ini (`UPDATE_REPO`, otomatis dari CI). Unduhan
   berjalan di latar dan bisa dijeda/dilanjutkan/dibatalkan, diverifikasi
   ukuran + SHA-256, lalu dipasang lewat installer Android.
+- **Widget layar utama** (tekan lama homescreen → Widget → TempMail):
+  - *Alamat & OTP*: alamat aktif + OTP terbaru, tombol salin alamat/OTP,
+    muat ulang, dan "Tunggu" (membuka aplikasi langsung menunggu OTP).
+  - *Buat cepat*: premium / basic / standard / semua — alamat baru dibuat
+    di latar, jadi aktif, dan langsung disalin.
 - Pembaruan hanya bisa dipasang di atas versi yang **ditandatangani keystore
   yang sama** — pastikan secret `KEYSTORE_*` selalu terisi di CI.
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:tempmail/home_widgets.dart';
 import 'package:tempmail/main.dart';
 import 'package:tempmail/screens_main.dart';
 
@@ -144,4 +145,37 @@ void main() {
     // Bersihkan widget (dan timer/animasi) sebelum test selesai.
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'tombol "Tunggu OTP" di widget membuka tab OTP & mulai menunggu',
+    (tester) async {
+      await tester.pumpWidget(const TempMailApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Dibuka dari widget sebelum alamat aktif termuat → perintah ditahan.
+      HomeWidgets.handleLaunchForTest(Uri.parse('tempmail://wait'));
+      await tester.pump();
+      expect(currentTab.value, kTabOtp);
+      expect(otpCommand.value, 'wait');
+
+      // Alamat aktif siap → penantian langsung dimulai, perintah dikonsumsi.
+      await tester.runAsync(() => appState.setActive('w@x.com', 'w@x.com'));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(otpCommand.value, isNull);
+      // Penantian benar-benar dijalankan: masih berjalan ("Batal (n)") atau
+      // sudah selesai dengan galat (HTTP di tes selalu membalas 400).
+      final running = find.textContaining('Batal (').evaluate().isNotEmpty;
+      final finished = find.textContaining('(400)').evaluate().isNotEmpty;
+      expect(running || finished, isTrue);
+      if (running) {
+        // Batalkan supaya request/timer tidak tertinggal.
+        await tester.tap(find.textContaining('Batal ('));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.runAsync(() => appState.clearActive());
+      HomeWidgets.handleLaunchForTest(Uri.parse('tempmail://open'));
+      expect(currentTab.value, kTabHome);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

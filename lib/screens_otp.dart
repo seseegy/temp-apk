@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'main.dart';
+import 'home_widgets.dart';
 import 'notify.dart';
 import 'screens_main.dart' show fmtTime;
 
@@ -58,6 +59,15 @@ class _OtpScreenState extends State<OtpScreen> {
     appState.addListener(_onState);
     currentTab.addListener(_onTab);
     Notifier.instance.addListener(_onNotif);
+    otpCommand.addListener(_onCommand);
+  }
+
+  /// Perintah dari widget layar utama ("Tunggu OTP"). Bila alamat aktif
+  /// belum termuat (aplikasi baru dibuka), dijalankan saat alamat siap.
+  void _onCommand() {
+    if (!mounted || otpCommand.value != 'wait' || _ref == null) return;
+    otpCommand.value = null;
+    if (!_waiting) _wait();
   }
 
   /// Tombol "Berhenti" di notifikasi status menunggu.
@@ -85,8 +95,16 @@ class _OtpScreenState extends State<OtpScreen> {
 
   /// Notifikasi OTP hanya bila pengguna tidak sedang melihat tab OTP.
   void _notifyOtp(String code, dynamic msg, {String? address}) {
-    if (Notifier.instance.inForeground && currentTab.value == kTabOtp) return;
     final m = msg is Map ? msg : const {};
+    // Widget layar utama ikut menampilkan OTP alamat aktif.
+    if (address == null || address == _addr) {
+      HomeWidgets.publishOtp(
+        code,
+        subject: m['subject']?.toString(),
+        from: m['from']?.toString(),
+      );
+    }
+    if (Notifier.instance.inForeground && currentTab.value == kTabOtp) return;
     Notifier.instance.otpArrived(
       code,
       subject: m['subject']?.toString(),
@@ -108,6 +126,7 @@ class _OtpScreenState extends State<OtpScreen> {
     appState.removeListener(_onState);
     currentTab.removeListener(_onTab);
     Notifier.instance.removeListener(_onNotif);
+    otpCommand.removeListener(_onCommand);
     Notifier.instance.clearWaiting();
     _sub?.cancel();
     _waitTick?.cancel();
@@ -149,6 +168,7 @@ class _OtpScreenState extends State<OtpScreen> {
     } else {
       setState(() {});
     }
+    _onCommand();
   }
 
   String? get _ref => appState.activeRef;
@@ -179,6 +199,17 @@ class _OtpScreenState extends State<OtpScreen> {
           _latest = r;
           _latestEmpty = null;
         });
+        final code = r is Map ? r['otp']?.toString() : null;
+        final msg = r is Map && r['message'] is Map
+            ? r['message'] as Map
+            : null;
+        if (code != null && code.isNotEmpty) {
+          HomeWidgets.publishOtp(
+            code,
+            subject: msg?['subject']?.toString(),
+            from: msg?['from']?.toString(),
+          );
+        }
       }
     } on ApiException catch (e) {
       if (!mounted || gen != _refGen) return;
