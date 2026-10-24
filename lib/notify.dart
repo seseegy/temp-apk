@@ -43,6 +43,7 @@ class Notifier with WidgetsBindingObserver {
   static const _keepAliveId = 7001;
   static const _otpId = 7002;
   static const _updateId = 7003;
+  static const _linkId = 7004;
 
   static const _icon = 'ic_stat_mail';
 
@@ -286,6 +287,61 @@ class Notifier with WidgetsBindingObserver {
               AndroidNotificationAction(
                 'otp_copy',
                 'Salin',
+                showsUserInterface: true,
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  /// Link verifikasi / login / reset yang baru masuk (sudah disalin).
+  Future<void> linkArrived(
+    String url, {
+    String? subject,
+    String? from,
+    String? address,
+  }) async {
+    if (!_ready) return;
+    final host = Uri.tryParse(url)?.host ?? '';
+    final info = [
+      subject,
+      from,
+    ].where((e) => e != null && e.trim().isNotEmpty).join(' · ');
+    final body = [
+      if (info.isNotEmpty) info,
+      url,
+      if (address != null) 'ke $address',
+      'Sudah disalin otomatis',
+    ].join('\n');
+    try {
+      await _plugin.show(
+        id: _linkId,
+        title: host.isEmpty ? 'Link verifikasi masuk' : 'Link masuk · $host',
+        body: body,
+        payload: jsonEncode({'t': 'link', 'url': url}),
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            'link',
+            'Link verifikasi masuk',
+            channelDescription:
+                'Link verifikasi / login / reset yang baru masuk',
+            icon: _icon,
+            importance: Importance.high,
+            priority: Priority.high,
+            category: AndroidNotificationCategory.message,
+            ticker: 'Link verifikasi masuk',
+            styleInformation: BigTextStyleInformation(body),
+            actions: const [
+              AndroidNotificationAction(
+                'link_copy',
+                'Salin',
+                showsUserInterface: true,
+              ),
+              AndroidNotificationAction(
+                'link_open',
+                'Buka',
                 showsUserInterface: true,
               ),
             ],

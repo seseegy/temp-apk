@@ -61,6 +61,17 @@
             android:textColor="@color/widget_text"
             android:textSize="24sp"
             android:textStyle="bold" />
+        <!-- Dipakai bila item terakhir berupa link (OTP disembunyikan). -->
+        <TextView
+            android:id="@+id/w_link"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="middle"
+            android:singleLine="true"
+            android:textColor="@color/widget_accent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
         <TextView
             android:id="@+id/w_otp_info"
             android:layout_width="match_parent"

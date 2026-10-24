@@ -12,6 +12,10 @@ notifikasi, debug, dan admin.
   berjalan, aplikasi tetap menunggu walau ditinggal (foreground service,
   notifikasi status dengan tombol **Berhenti**). OTP yang masuk langsung
   disalin dan muncul sebagai notifikasi.
+- **Link verifikasi / login**: hasil "Tunggu link", "Link terbaru", dan
+  tunggu banyak alamat (mode Link) langsung disalin; saat aplikasi ditinggal
+  muncul notifikasi dengan tombol **Salin** dan **Buka** (dibuka di browser,
+  bukan di dalam aplikasi). Widget ikut menampilkan link terakhir.
 - **Pembaruan lewat APK** (Menu → Pembaruan aplikasi): versi terbaru dibaca
   dari GitHub Releases repo ini (`UPDATE_REPO`, otomatis dari CI). Unduhan
   berjalan di latar dan bisa dijeda/dilanjutkan/dibatalkan, diverifikasi

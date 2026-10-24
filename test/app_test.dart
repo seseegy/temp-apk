@@ -80,6 +80,12 @@ void main() {
       setFavoritesFrom([]);
     });
 
+    test('openExternalUrl hanya menerima http/https', () async {
+      expect(await openExternalUrl('javascript:alert(1)'), isFalse);
+      expect(await openExternalUrl('intent://x#Intent;end'), isFalse);
+      expect(await openExternalUrl('bukan url'), isFalse);
+    });
+
     test('msgTimeShort pakai umur pesan bila ada', () {
       expect(msgTimeShort({'age_seconds': 300}), '5 mnt lalu');
       expect(msgTimeShort({}), '');

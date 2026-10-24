@@ -92,6 +92,14 @@ void _onNotificationAction(String action, String payload) {
       }
       navigatorKey.currentState?.popUntil((r) => r.isFirst);
       currentTab.value = kTabOtp;
+    case 'link':
+      final url = p['url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        Clipboard.setData(ClipboardData(text: url));
+        if (action == 'link_open') openExternalUrl(url);
+      }
+      navigatorKey.currentState?.popUntil((r) => r.isFirst);
+      currentTab.value = kTabOtp;
     case 'wait':
       if (action.isEmpty) {
         navigatorKey.currentState?.popUntil((r) => r.isFirst);
@@ -382,6 +390,20 @@ void showOk(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(msg)));
+}
+
+const _appChannel = MethodChannel('tempmail/app');
+
+/// Buka link (http/https) di browser HP — bukan di dalam aplikasi.
+Future<bool> openExternalUrl(String url) async {
+  final u = Uri.tryParse(url);
+  if (u == null || !(u.scheme == 'http' || u.scheme == 'https')) return false;
+  try {
+    return await _appChannel.invokeMethod<bool>('openUrl', {'url': url}) ??
+        false;
+  } catch (_) {
+    return false;
+  }
 }
 
 /// Salin ke clipboard + beri tahu pengguna.

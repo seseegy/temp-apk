@@ -43,8 +43,14 @@ class WidgetCopyReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
         val key = intent.getStringExtra(EXTRA_KEY) ?: return
-        val label = if (key == "otp") "OTP" else "Alamat"
-        val text = HomeWidgetPlugin.getData(context).getString(key, null)
+        val data = HomeWidgetPlugin.getData(context)
+        val label = when (key) {
+            "address" -> "Alamat"
+            "item_value" -> if (data.getString("item_kind", null) == "link") "Link" else "OTP"
+            else -> "OTP"
+        }
+        val text = data.getString(key, null)
+            ?: if (key == "item_value") data.getString("otp", null) else null
         if (text.isNullOrBlank()) {
             Toast.makeText(context, "Belum ada $label", Toast.LENGTH_SHORT).show()
             return

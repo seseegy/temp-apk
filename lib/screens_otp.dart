@@ -9,6 +9,7 @@ import 'api.dart';
 import 'main.dart';
 import 'home_widgets.dart';
 import 'notify.dart';
+import 'otp_detect.dart';
 import 'screens_main.dart' show fmtTime;
 
 class OtpScreen extends StatefulWidget {
@@ -28,6 +29,8 @@ class _OtpScreenState extends State<OtpScreen> {
   int _waitGen = 0; // naik saat "Batal" → hasil tunggu lama diabaikan
   int _waitSecs = 0;
   Timer? _waitTick;
+  Timer? _waitPoll; // cek inbox selama menunggu (cadangan deteksi server)
+  bool _polling = false;
   final _timeoutCtl = TextEditingController(text: '50');
   final _refsCtl = TextEditingController();
   dynamic _waitAnyResult;
@@ -179,12 +182,77 @@ class _OtpScreenState extends State<OtpScreen> {
   void _stopWaitTick() {
     _waitTick?.cancel();
     _waitTick = null;
+    _waitPoll?.cancel();
+    _waitPoll = null;
+  }
+
+  /// Cadangan bila server tidak mengenali kode (mis. "08737 adalah kode
+  /// konfirmasi Facebook"): cari OTP di email terbaru inbox.
+  /// [maxAgeSec] = hanya email yang masuk dalam N detik terakhir.
+  Future<Map<String, dynamic>?> _detectFromInbox(
+    String ref, {
+    int? maxAgeSec,
+  }) async {
+    final r = await api.messages(ref, limit: 10, fresh: true);
+    final list = listOf(r, ['messages', 'items']).whereType<Map>().toList();
+    int ageOf(Map m) {
+      final a = m['age_seconds'];
+      return a is num ? a.round() : 1 << 30;
+    }
+
+    list.sort((a, b) => ageOf(a).compareTo(ageOf(b)));
+    for (final m in list) {
+      if (maxAgeSec != null && ageOf(m) > maxAgeSec) continue;
+      final hit = messageOtp(m);
+      if (hit == null) continue;
+      return {
+        'otp': hit.$1,
+        'detected': !hit.$2,
+        'message': {
+          'subject': m['subject'],
+          'from': m['from'],
+          'age_seconds': m['age_seconds'],
+        },
+      };
+    }
+    return null;
   }
 
   Future<void> _autoCopy(String code) async {
     await Clipboard.setData(ClipboardData(text: code));
     HapticFeedback.mediumImpact();
     if (mounted) showOk(context, 'OTP $code disalin otomatis');
+  }
+
+  /// Link verifikasi/login masuk: salin otomatis, kirim ke widget, dan
+  /// (bila [notify] & tab OTP tidak sedang dilihat) tampilkan notifikasi.
+  Future<void> _gotLink(
+    String url,
+    dynamic msg, {
+    String? address,
+    bool notify = true,
+  }) async {
+    final m = msg is Map ? msg : const {};
+    await Clipboard.setData(ClipboardData(text: url));
+    HapticFeedback.mediumImpact();
+    if (mounted) showOk(context, 'Link disalin otomatis');
+    if (address == null || address == _addr) {
+      HomeWidgets.publishLink(
+        url,
+        subject: m['subject']?.toString(),
+        from: m['from']?.toString(),
+      );
+    }
+    if (!notify ||
+        (Notifier.instance.inForeground && currentTab.value == kTabOtp)) {
+      return;
+    }
+    Notifier.instance.linkArrived(
+      url,
+      subject: m['subject']?.toString(),
+      from: m['from']?.toString(),
+      address: address ?? _addr,
+    );
   }
 
   Future<void> _loadLatest() async {
@@ -214,10 +282,24 @@ class _OtpScreenState extends State<OtpScreen> {
     } on ApiException catch (e) {
       if (!mounted || gen != _refGen) return;
       if (e.code == 'NO_OTP' || e.status == 404) {
+        // Server tidak menemukan OTP → coba deteksi sendiri dari inbox.
+        Map<String, dynamic>? fb;
+        try {
+          fb = await _detectFromInbox(ref);
+        } catch (_) {}
+        if (!mounted || gen != _refGen) return;
         setState(() {
-          _latest = null;
-          _latestEmpty = 'Belum ada email berisi OTP. Kirim ke alamat ini lalu tekan "Tunggu OTP".';
+          _latest = fb;
+          _latestEmpty = fb != null ? null : 'Belum ada email berisi OTP. Kirim ke alamat ini lalu tekan "Tunggu OTP".';
         });
+        if (fb != null) {
+          final msg = fb['message'] as Map;
+          HomeWidgets.publishOtp(
+            '${fb['otp']}',
+            subject: msg['subject']?.toString(),
+            from: msg['from']?.toString(),
+          );
+        }
       } else {
         showError(context, e);
       }
@@ -286,6 +368,34 @@ class _OtpScreenState extends State<OtpScreen> {
     });
     _waitTick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _waitSecs++);
+    });
+    // Sambil menunggu server, periksa inbox: email BARU yang kodenya tidak
+    // dikenali server tetap tertangkap (deteksi aplikasi).
+    final started = DateTime.now();
+    _waitPoll = Timer.periodic(const Duration(seconds: 6), (_) async {
+      if (_polling || gen != _waitGen) return;
+      _polling = true;
+      try {
+        final elapsed = DateTime.now().difference(started).inSeconds;
+        final fb = await _detectFromInbox(ref, maxAgeSec: elapsed + 5);
+        if (fb == null || gen != _waitGen || !mounted) return;
+        _waitGen++; // hasil long-poll server diabaikan
+        _stopWaitTick();
+        Notifier.instance.setWaiting('wait', null);
+        setState(() {
+          _waiting = false;
+          _waitResult = fb;
+          _waitError = null;
+          _waitStale = false;
+        });
+        final code = '${fb['otp']}';
+        _autoCopy(code);
+        _notifyOtp(code, fb['message'], address: addr);
+      } catch (_) {
+        // Gagal cek inbox tidak mengganggu penantian utama.
+      } finally {
+        _polling = false;
+      }
     });
     try {
       final r = await api.otpWait(ref, timeout: _timeout);
@@ -367,14 +477,14 @@ class _OtpScreenState extends State<OtpScreen> {
       );
       if (gen != _anyGen) return;
       if (mounted) setState(() => _waitAnyResult = r);
+      final addr = r is Map ? (r['address'] ?? r['ref'])?.toString() : null;
       final code = r is Map ? r['otp']?.toString() : null;
-      if (code != null && code.isNotEmpty) {
+      final link = _waitAnyMode == 'link' ? _value(r, 'link') : null;
+      if (link != null && link.isNotEmpty) {
+        _gotLink(link, r is Map ? r['message'] : null, address: addr);
+      } else if (code != null && code.isNotEmpty) {
         _autoCopy(code);
-        _notifyOtp(
-          code,
-          r['message'],
-          address: (r['address'] ?? r['ref'])?.toString(),
-        );
+        _notifyOtp(code, r['message'], address: addr);
       }
     } catch (e) {
       if (gen != _anyGen) return;
@@ -496,6 +606,12 @@ class _OtpScreenState extends State<OtpScreen> {
             _verifyLatest = r;
           }
         });
+        final link = _value(r, 'link');
+        if (link != null && link.isNotEmpty) {
+          // "Tunggu link" → notifikasi bila ditinggal; "Link terbaru" dipicu
+          // dari aplikasi → cukup disalin.
+          _gotLink(link, r is Map ? r['message'] : null, notify: wait);
+        }
       }
     } catch (e) {
       if (wait && vgen != _verifyGen) return;
@@ -645,6 +761,17 @@ class _OtpScreenState extends State<OtpScreen> {
                             ),
                     ),
                   ),
+                  if (isLink)
+                    IconButton(
+                      tooltip: 'Buka di browser',
+                      icon: const Icon(Icons.open_in_new),
+                      onPressed: () async {
+                        final ok = await openExternalUrl(code);
+                        if (!ok && mounted) {
+                          showError(context, 'Link tidak bisa dibuka: $code');
+                        }
+                      },
+                    ),
                   IconButton.filledTonal(
                     tooltip: 'Salin',
                     icon: const Icon(Icons.copy),
@@ -662,6 +789,15 @@ class _OtpScreenState extends State<OtpScreen> {
                       .where((e) => e != null && e.toString().isNotEmpty)
                       .join(' • '),
                   style: TextStyle(color: s.onSurfaceVariant),
+                ),
+              ),
+            if (r is Map && r['detected'] == true)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Dideteksi aplikasi dari subjek/isi email (server tidak '
+                  'mengenalinya).',
+                  style: TextStyle(color: s.onSurfaceVariant, fontSize: 12),
                 ),
               ),
           ],

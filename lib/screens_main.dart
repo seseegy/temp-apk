@@ -6,6 +6,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import 'api.dart';
 import 'main.dart';
+import 'otp_detect.dart';
 import 'update.dart';
 
 /// Parse waktu dari API. String tanpa zona waktu (mis. "2026-10-20 16:04:48",
@@ -878,7 +879,8 @@ class _InboxScreenState extends State<InboxScreen> {
         separatorBuilder: (_, _) => const Divider(height: 1),
         itemBuilder: (ctx, i) {
           final m = _msgs[i] as Map;
-          final otp = m['otp'];
+          // OTP dari server, atau terdeteksi aplikasi bila server melewatkannya.
+          final otp = messageOtp(m)?.$1;
           final subject = _str(m['subject'], '(Tanpa subjek)');
           final from = _str(m['from'], '-');
           return Dismissible(
@@ -1174,6 +1176,14 @@ class _MessageDetailScreenState extends State<MessageDetailScreen> {
     if (all is List) out.addAll(all.map((e) => e.toString()));
     final one = m['otp']?.toString();
     if (one != null && one.isNotEmpty && !out.contains(one)) out.insert(0, one);
+    if (out.isEmpty) {
+      // Server tidak mengenali kodenya → coba deteksi dari subjek/isi.
+      final c = detectOtp(
+        subject: m['subject']?.toString(),
+        text: (m['text'] ?? m['preview'])?.toString(),
+      );
+      if (c != null) out.add(c);
+    }
     return out;
   }
 
@@ -1256,6 +1266,15 @@ class _MessageDetailScreenState extends State<MessageDetailScreen> {
             ),
           ),
         ],
+        if (otps.isNotEmpty && _str(m['otp']).isEmpty && m['otp_all'] == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Kode dideteksi aplikasi dari subjek/isi email (server tidak '
+              'mengenalinya).',
+              style: TextStyle(color: s.onSurfaceVariant, fontSize: 12),
+            ),
+          ),
         if (links.isNotEmpty) ...[
           const SizedBox(height: 16),
           const Text(

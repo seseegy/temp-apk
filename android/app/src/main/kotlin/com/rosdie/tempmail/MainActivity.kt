@@ -53,6 +53,20 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
+                        // Link dari email dibuka di browser, bukan WebView aplikasi.
+                        "openUrl" -> {
+                            val url = call.argument<String>("url")
+                            val uri = url?.let { Uri.parse(it) }
+                            if (uri == null || (uri.scheme != "http" && uri.scheme != "https")) {
+                                result.success(false)
+                            } else {
+                                startActivity(
+                                    Intent(Intent.ACTION_VIEW, uri)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                                result.success(true)
+                            }
+                        }
                         "installApk" -> {
                             val path = call.argument<String>("path")
                             if (path == null) {
